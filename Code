@@ -1,0 +1,697 @@
+# Final project in programming - B.Sc. degree in information systems at Yezreel Valley College
+# Movies Recommendation System
+# Authors: Moshe Maharat & Avraham Pakada
+
+##########################################   Part 1 - The Algorithm   ###################################################################################################
+
+# Run dendrogram separately (lines in comment block), in order maintain the normal size of the GUI!!!
+
+import numpy as np
+import pandas as pd  # for CSV reading
+import re  # for locating regular words in tokenized words
+import nltk  # for stemming & tokenize
+
+# Preparing Data
+movies_df = pd.read_csv('movies.csv', encoding='latin1')  # convert CVS to dataframe
+
+# print(movies_df.head()) #show first 5 rows
+movies_df['plot'] = movies_df['tagline'].astype(str) + " -- " + movies_df['summary'].astype(str)  # joining 2 columns into a new column
+
+# Normalize Data
+from nltk.stem.snowball import SnowballStemmer  # for coverting words into root words
+
+# nltk.download('stopwords')
+stemmer = SnowballStemmer("english", ignore_stopwords=False)  # variable for generating root words
+
+
+def normalize(X):
+    normalized = []
+    for x in X:
+        words = nltk.word_tokenize(x)  # splitting sentences to words
+        normalized.append(' '.join([stemmer.stem(word) for word in words if re.match('[a-zA-Z]+',word)]))  # looping the splitted words, stemming all valid words and appending them to the list
+    for i in range(len(normalized)):
+        normalized[i] = normalized[i].lower()  # convert all word in list to lower case
+    return normalized
+
+
+# Pipline of: normalization, vectorization, creating matrix & fitting
+from sklearn.pipeline import Pipeline  # for creating a sequence of functions simultaneously
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer  # CountVectorizer counverting text into vectors, TfidfTransformer counverting vectors into TF-IDF matrix
+from sklearn.preprocessing import FunctionTransformer  # fitting and transformering methods
+
+nltk.download('punkt')
+
+pipe = Pipeline([
+    ('normalize', FunctionTransformer(normalize, validate=False)),
+    # fitting and transformering method "normalize" without validate it
+    ('counter_vectorizer', CountVectorizer(
+        max_df=0.8, max_features=200000,# max_df=ignore terms that appear in more than 80% in the text, max_features=select the 200000 most common words in the data
+        min_df=0.1, stop_words='english',# min_df=ignore terms that appear in less than 10% in the text, stop_words= define list of words  in english that we don’t want to use as features like ‘the’, ‘and’ etc.
+        ngram_range=(1, 3))),  # ngram_range= include sentences with minimum 1 word and maximum 3
+    ('tfidf_transform', TfidfTransformer())  # fitting and transformering method "tfidf_transform"
+])
+
+tfidf_matrix = pipe.fit_transform([x for x in movies_df['plot']])  ##fitting and transformering column "plot" into TF-IDF matrix
+
+# cosine_similarity calculating and measuring “distance” between  vectors
+from sklearn.metrics.pairwise import cosine_similarity
+similarity_distance = 1 - cosine_similarity(tfidf_matrix)  # first we calculate the cosine similarity between the vectors in the matrix (x * y / ||x|| * ||y||) and then we subtract the result by one to find the distance
+
+"""
+# dendrogram creation to demonstrate the similarity distances
+import matplotlib.pyplot as plt  # for dendrogram plotting
+from scipy.cluster.hierarchy import linkage, dendrogram  # for creating linkage dendrogram
+
+
+mergings = linkage(similarity_distance,
+                   method='complete')  # variable that perform complete linkage clustering on all similarity distances
+dendrogram_ = dendrogram(mergings,
+                         labels=[x for x in movies_df["title"]],  # axis x contains all values from "plot" columns
+                         leaf_rotation=90,  # labels are rotated in 90 degreess angle
+                         leaf_font_size=0.1,  # font size of the labels
+                         )
+fig = plt.gcf()  # creating plot figure
+labels = [lbl.set_color('r') for lbl in
+          plt.gca().get_xmajorticklabels()]  # lopping every label in axis x and turn it to red
+fig.set_size_inches(108, 21)  # size of the dendrogram in inches
+plt.ylim(0, 30)  # Y-axis is between 0-30
+plt.title("Dendrogram Of Similarity Distances")  # title of dendrogram
+plt.show()  # showing the dendrogram
+"""
+
+# method to find similar movies
+def find_similar(title):
+    index = movies_df[movies_df['title'] == title].index[0]  # variable that find first title in column that matches the user input
+    vector = similarity_distance[index,:]  # variable that find the matching row index in distances martix, takes the vector from that rows with the intire column
+    most_similar = movies_df.iloc[np.argsort(vector)[1:6], 18]  # find the second most 5 similar movie index in the vector. output is column 18 in df (title)
+
+    recommendations_index_list = []
+    for i in most_similar:
+        recommendations_index_list.append((movies_df[movies_df['title'] == i].index[0]))
+    similarity_percent = (1 - ((similarity_distance[index, recommendations_index_list]))) * 100
+    similarity_percent_final = np.round_(similarity_percent, decimals=2)
+
+    final_result = ""
+    for count, movie in enumerate(most_similar, start=1):  # loop on most_similar and print movies in hierarchical order
+        final_result += str(count) + ")  " + movie + "  -  " + str(similarity_percent_final[count - 1]) + "%" + "\n"  # adding movies to string
+
+    return final_result
+
+
+##########################################   Part 2 - SQL   ###################################################################################################
+
+from tkinter import messagebox  # for tkinter messagebox
+import mysql.connector  # for sql connection
+
+mydb = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="123456",
+    database="newdb")
+
+sql_select_Query = ("CREATE TABLE registered (email VARCHAR(255),"
+                          "user_name VARCHAR(255),"
+                          "password VARCHAR(255),"
+                          "credit_card_num VARCHAR(255),"                                 ###run only one time
+                          "credit_validity DATE,"
+                          "cvv INT(3),"
+                          "PRIMARY KEY (user_name))")
+cursor = mydb.cursor()
+cursor.execute(sql_select_Query)
+
+##########################################   Part 3 - GUI   ###################################################################################################
+
+import tkinter as tk  # for building GUI
+from tkinter import *
+from PIL import ImageTk  # for importing images
+import pyglet  # importing fonts
+
+bg_colour = "#3d6466"  # background colour
+
+# fonts
+pyglet.font.add_file("fonts/Ubuntu-Bold.ttf")  # load custom fonts
+pyglet.font.add_file("fonts/Shanti-Regular.ttf")  # load custom fonts
+
+
+def open_login_window():
+    def confirm():
+        mydb = mysql.connector.connect(host="localhost", user="root", password="123456", database="newdb")
+        curr = mydb.cursor()
+        U_name_login = username_log.get()
+        Password_login = password_log.get()
+
+        sql = "SELECT * FROM registered WHERE User_name = %s AND Password = %s"
+        curr.execute(sql, [U_name_login, Password_login])
+        myresults = curr.fetchall()
+        if myresults:  # if username and password exist in SQL
+            messagebox.showinfo("Information", "Login success")
+            login.destroy()
+            open_main_screen()
+            return True
+        else:
+            messagebox.showinfo("Error", "Incorrent Username or Password ")
+            username_log.delete(0, END)
+            password_log.delete(0, END)
+            return False
+
+    # window & frame
+    login = tk.Tk()  # creating a login window
+    login.title("Movies Recommendation System - Login")  # title of window
+    login_frame = tk.Frame(login, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+    login_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    login.geometry('900x600')  # size of window
+    login_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    global username_log
+    global password_log
+
+    # logos
+    logo_img1 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/Logo2.png", master=login)  # import image
+    logo_widget1 = tk.Label(login_frame, image=logo_img1, bg=bg_colour)  # converting the image into a widget
+    logo_widget1.image = logo_img1  # define the widget as logo image
+    logo_widget1.place(x=0, y=0)  # place the image in our frame
+
+    logo_img2 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/YES2.png", master=login)  # import image
+    logo_widget2 = tk.Label(login_frame, image=logo_img2, bg=bg_colour)  # converting the image into a widget
+    logo_widget2.image = logo_img2  # define the widget as logo image
+    logo_widget2.place(x=700, y=15)  # place the image in our frame
+
+    # labels
+    tk.Label(login_frame, text="User Name:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(x=255,y=250)  # label for user name
+    tk.Label(login_frame, text="Password:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(x=275,y=321)  # label for password
+    tk.Label(login_frame, text="Welcome !", bg=bg_colour, fg="white", font=("Ubuntu", 45)).place(x=320,y=80)  # label for password
+
+    # fields
+    username_log = tk.Entry(login)
+    username_log.place(x=410, y=258, width=200, height=30)  # user name
+    password_log = tk.Entry(login)
+    password_log.place(x=410, y=328, width=200, height=30)  # password
+    password_log.config(show="*")  # Shows the password as asterisks
+
+    # buttons
+    tk.Button(  # create button widget
+        login_frame,  # locate in our frame
+        text="Sign In",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=confirm  # command of button
+
+    ).place(x=430, y=450)  # axis y gap from item above
+
+    tk.Button(  # create button widget
+        login_frame,  # locate in our frame
+        text="Register",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colour
+        fg="black",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while clicking
+        command=lambda: (open_register_screen(), login.destroy()),  # command of button
+    ).place(x=600, y=450)  # axis y gap from item above
+
+    tk.Button(  # create button widget
+        login_frame,  # locate in our frame
+        text="Forgot Password",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colour
+        fg="black",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while clicking
+        command=lambda: (open_forget_screen(), login.destroy()),  # command of button
+    ).place(x=130, y=450)
+
+    login.mainloop()
+
+
+def open_main_screen():
+    # window & frame
+    main = tk.Tk()  # creating a login window
+    main.title("Movies Recommendation System - Main")  # title of window
+    main_frame = tk.Frame(main, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+    main_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    main.geometry('900x600')  # size of window
+    main_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    # label
+    tk.Label(main_frame, text="Insert a movie that you liked:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(
+        x=50, y=130)
+
+    # text box
+    text = Text(main_frame, width=400, height=8, background=
+    "#28393a", font=("Ubuntu", 20), fg="#28393a", state=DISABLED)
+    text.place(x=-200, y=206)
+
+    # field
+    movie_name = Entry(main_frame)
+    movie_name.place(x=420, y=137, width=200, height=30)
+
+    # buttons
+    tk.Button(  # create button widget
+        main_frame,  # locate in our frame
+        text="Recommend",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colour
+        fg="black",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while clicking
+        command=lambda: printMovie(),  # command of button
+    ).place(x=650, y=120)  # axis y gap from item above
+
+    tk.Button(  # create button widget
+        main_frame,  # locate in our frame
+        text="Back",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=lambda: (main.destroy(), open_login_window()),  # command of button
+    ).place(x=280, y=500)  # axis y gap from item above
+
+    # logo
+    logo_img3 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/movie_time2.png", master=main)  # import image
+    logo_widget3 = tk.Label(main_frame, image=logo_img3, bg=bg_colour)  # converting the image into a widget
+    logo_widget3.image = logo_img3  # define the widget as logo image
+    logo_widget3.place(x=280, y=5)  # place the image in our frame
+
+    def delete_all():  # clear movies list and movie field
+        label.destroy()
+        movie_name.delete(0, END)
+
+    def printMovie():
+        global label
+        m_name = movie_name.get()
+        if str(m_name) in movies_df.values:
+            label = Label(main_frame, text="You might also like:\n\n" + find_similar(m_name), bg="#28393a", fg="snow",
+                          font=("Ubuntu", 19), justify=LEFT)
+            label.place(x=105, y=207)
+        else:
+            label = Label(main_frame,
+                          text="This movie doesn't exist in database,\nPress clear and insert another movie.",
+                          bg="#28393a", fg="firebrick1",
+                          font=("Ubuntu", 22), justify=LEFT)
+            label.place(x=195, y=287)
+
+    tk.Button(  # create button widget
+        main_frame,  # locate in our frame
+        text="Clear",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colouring
+        fg="black",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while click
+        command=lambda: (delete_all())
+    ).place(x=520, y=502)  # axis y gap from item above
+
+
+def password_changed():
+    # window & frame
+    password_changed = tk.Tk()  # creating a login window
+    password_changed.title("Movies Recommendation System - Password Changed")  # title of window
+    password_changed_frame = tk.Frame(password_changed, width=1550, height=800,
+                                      bg=bg_colour)  # size and colour of frame
+    password_changed_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    password_changed.geometry('900x600')  # size of window
+    password_changed_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    # labels
+    tk.Label(password_changed_frame, text="Password changed successfully", bg=bg_colour, fg="white",
+             font=("Shanti", 35)).place(x=140, y=320)
+
+    # logo
+    logo_img5 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/password changed2.png",
+                                   master=password_changed)  # import image
+    logo_widget5 = tk.Label(password_changed_frame, image=logo_img5, bg=bg_colour)  # converting the image into a widget
+    logo_widget5.image = logo_img5  # define the widget as logo image
+    logo_widget5.place(x=290, y=15)  # place the image in our frame
+
+    # buttons
+    tk.Button(  # create button widget
+        password_changed_frame,  # locate in our frame
+        text="Back to home screen",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=lambda: (password_changed.destroy(), open_login_window()),  # command of button
+    ).place(x=300, y=470)  # axis y gap from item above
+
+
+def open_forget_screen():
+    def confirm_update():
+        mydb = mysql.connector.connect(host="localhost", user="root", password="123456", database="newdb")
+        curr = mydb.cursor()
+        global Uname  # for user name field in open forget screen
+        Uname = user_name.get()
+        C_v_v = cvv.get()
+
+        sql = "SELECT * FROM registered WHERE User_name = %s AND Cvv = %s"
+        curr.execute(sql, [Uname, C_v_v])
+        myresults = curr.fetchall()
+        if myresults:
+            messagebox.showinfo("Information", "Correct username and cvv")
+            forget.destroy()
+            open_new_password()
+            return True
+        else:
+            messagebox.showinfo("Error", "Incorrect username or cvv!")
+            user_name.delete(0, END)
+            cvv.delete(0, END)
+            return False
+
+    # window & frame
+    forget = tk.Tk()  # creating a login window
+    forget.title("Movies Recommendation System - Forgot Password")  # title of window
+    forget_frame = tk.Frame(forget, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+    forget_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    forget.geometry('900x600')  # size of window
+    forget_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    # label
+    tk.Label(forget_frame, text="Forgot your password?", bg=bg_colour, fg="white", font=("Shanti", 35)).place(x=220,
+                                                                                                              y=170)
+    tk.Label(forget_frame, text="Fill in the following details:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(
+        x=300, y=240)
+    tk.Label(forget_frame, text="User name:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(x=262, y=317)
+    tk.Label(forget_frame, text="CVV:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(x=345, y=377)
+
+    # field
+    global user_name  # for user name in open forgot screen
+    global cvv  # for cvv in open forgot screen
+
+    user_name = tk.Entry(forget)
+    user_name.place(x=420, y=325, width=230, height=30)  # defile field frame and size
+    cvv = tk.Entry(forget)
+    cvv.place(x=420, y=385, width=230, height=30)  # defile field frame and size
+
+
+    # buttons
+    tk.Button(  # create button widget
+        forget_frame,  # locate in our frame
+        text="Proceed",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colour
+        fg="black",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while clicking
+        # command= main.find_similar(title)  # command of button
+        # command=lambda: (forget.destroy(), open_new_password()),  # command of button
+        command=confirm_update
+    ).place(x=550, y=470)  # axis y gap from item above
+
+    tk.Button(  # create button widget
+        forget_frame,  # locate in our frame
+        text="Back",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=lambda: (forget.destroy(), open_login_window()),  # command of button
+    ).place(x=250, y=470)  # axis y gap from item above
+
+    # logo
+    logo_img4 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/forget3.png", master=forget)  # import image
+    logo_widget4 = tk.Label(forget_frame, image=logo_img4, bg=bg_colour)  # converting the image into a widget
+    logo_widget4.image = logo_img4  # define the widget as logo image
+    logo_widget4.place(x=400, y=30)  # place the image in our frame
+
+    def open_new_password():
+        def update():
+            mydb = mysql.connector.connect(host="localhost", user="root", password="123456", database="newdb")
+            USERNAME = U_name.get()
+            N_password = insert_password.get()
+            Re_N_password = reinsert_password.get()
+            curr = mydb.cursor()
+            if (Uname == USERNAME):
+                try:
+                    sql = "UPDATE registered SET password = %s WHERE User_name = %s"
+                    val = (N_password, USERNAME)
+                    curr.execute(sql, val)
+                    mydb.commit()
+                    if (N_password == Re_N_password):
+                        messagebox.showinfo("information", "password Updated successfully")
+                        new_password.destroy()
+                        password_changed()
+
+                    else:
+                        messagebox.showinfo("information", "The passwords are not identical!")
+                        insert_password.delete(0, END)
+                        reinsert_password.delete(0, END)
+
+                except Exception as e:
+                    print(e)
+
+            else:
+                messagebox.showinfo("information", "The user name is incorrect!\nEnter details again")
+                insert_password.delete(0, END)
+                reinsert_password.delete(0, END)
+                U_name.delete(0, END)
+                # new_password.destroy()
+                # open_forget_screen()
+
+        # window & frame
+        new_password = tk.Tk()  # creating a login window
+        new_password.title("Movies Recommendation System - New Password")  # title of window
+        new_password_frame = tk.Frame(new_password, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+        new_password_frame.grid(row=0, column=0)  # place the frame in row & column 0
+        new_password.geometry('900x600')  # size of window
+        new_password_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+        # label
+        tk.Label(new_password_frame, text="Insert user name:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(
+            x=241, y=246)
+        tk.Label(new_password_frame, text="Insert new password:", bg=bg_colour, fg="white", font=("Shanti", 20)).place(
+            x=200, y=307)
+        tk.Label(new_password_frame, text="Reinsert new password:", bg=bg_colour, fg="white",
+                 font=("Shanti", 20)).place(x=170, y=367)
+
+        # field
+        global U_name
+        global insert_password  # title field
+        global reinsert_password  # title field
+
+        U_name = tk.Entry(new_password)
+        U_name.place(x=470, y=255, width=230, height=30)
+        insert_password = tk.Entry(new_password)
+        insert_password.place(x=470, y=315, width=230, height=30)  # defile field frame and size
+        insert_password.config(show="*")
+        reinsert_password = tk.Entry(new_password)
+        reinsert_password.place(x=470, y=375, width=230, height=30)  # defile field frame and size
+        reinsert_password.config(show="*")
+
+
+        # buttons
+        tk.Button(  # create button widget
+            new_password_frame,  # locate in our frame
+            text="Update",  # text of button
+            font=("Ubuntu", 20),  # font and size
+            bg="white",  # background colour
+            fg="black",  # font colour
+            cursor="hand2",  # define mouse icon
+            activebackground="black",  # background colour while clicking
+            activeforeground="white",  # font colour while clicking
+            command=update
+        ).place(x=550, y=470)  # axis y gap from item above
+
+        tk.Button(  # create button widget
+            new_password_frame,  # locate in our frame
+            text="Back",  # text of button
+            font=("Ubuntu", 20),  # font and size
+            bg="#28393a",  # background colour
+            fg="white",  # font colour
+            cursor="hand2",  # define mouse icon
+            activebackground="#badee2",  # background colour while clicking
+            activeforeground="black",  # font colour while clicking
+            command=lambda: (new_password.destroy(), open_forget_screen()),  # command of button
+        ).place(x=250, y=470)  # axis y gap from item above
+
+        # logo
+        logo_img4 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/new password2.png",
+                                       master=new_password)  # import image
+        logo_widget4 = tk.Label(new_password_frame, image=logo_img4, bg=bg_colour)  # converting the image into a widget
+        logo_widget4.image = logo_img4  # define the widget as logo image
+        logo_widget4.place(x=340, y=10)  # place the image in our frame
+
+
+def open_register_screen():
+    def insert_user():
+        Email = em.get()
+        User_name = us.get()
+        Password = pw.get()
+        Credit_card_num = ccn.get()
+        Credit_validity = crv.get()
+        Cvv = cv.get()
+        mydb = mysql.connector.connect(host="localhost", user="root", password="123456", database="newdb")
+        curr = mydb.cursor()
+        if Email != "" and User_name != "" and Password != "" and Credit_card_num != "" and Credit_validity != "" and Cvv != "":
+            try:
+                sql = "INSERT INTO registered (Email,User_name, Password, Credit_card_num, Credit_validity, Cvv) VALUES (%s, %s, %s, %s, %s, %s)"
+                val = (Email, User_name, Password, Credit_card_num, Credit_validity, Cvv)
+                curr.execute(sql, val)
+                mydb.commit()
+                messagebox.showinfo("Information", "Record inserted successfully!")
+                register.destroy()
+                verified_screen()
+
+                em.delete(0, END)
+                us.delete(0, END)
+                pw.delete(0, END)
+                ccn.delete(0, END)
+                crv.delete(0, END)
+                cv.delete(0, END)
+
+            except Exception as e:
+                print(e)
+                mydb.rollback()
+                mydb.close()
+
+        else:
+            messagebox.showinfo("Error", "Fill in all the fields!")
+
+    # window & frame
+    register = tk.Tk()  # creating a login window
+    register.title("Movies Recommendation System - Register")  # title of window
+    register_frame = tk.Frame(register, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+    register_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    register.geometry('900x600')  # size of window
+    register.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    # labels
+    tk.Label(register_frame, text="Fill in the following details:", bg=bg_colour, fg="white",
+             font=("Ubuntu", 20)).place(x=317, y=70)
+    tk.Label(register_frame, text="E-mail", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=622, y=150)
+    tk.Label(register_frame, text="User Name", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=620, y=240)
+    tk.Label(register_frame, text="Password", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=620, y=330)
+    tk.Label(register_frame, text="Credit Card Number", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=321,
+                                                                                                             y=148)
+    tk.Label(register_frame, text="Expiration(yyyy-mm-dd)", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=316,
+                                                                                                                 y=239)
+    tk.Label(register_frame, text="CVV", bg=bg_colour, fg="white", font=("Shanti", 15)).place(x=318, y=328)
+
+    # field
+    global em  # for email
+    global us  # for user name
+    global pw  # for password
+    global ccn  # for credit card num
+    global crv  # for credit validity
+    global cv  # for cvv
+
+    em = tk.Entry(register)
+    em.place(x=620, y=180, width=200, height=30)  # for email
+    us = tk.Entry(register)
+    us.place(x=618, y=270, width=200, height=30)  # for user name
+    pw = tk.Entry(register)
+    pw.place(x=616, y=360, width=200, height=30)  # for password
+    pw.config(show="*")
+    ccn = tk.Entry(register)
+    ccn.place(x=319, y=180, width=200, height=30)  # for credit number
+    crv = tk.Entry(register)
+    crv.place(x=317, y=269, width=200, height=30)  # for Expiration
+    cv = tk.Entry(register)
+    cv.place(x=317, y=359, width=200, height=30)  # for CVV
+
+    # logo
+    logo_img5 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/register2.png", master=register)  # import image
+    logo_widget5 = tk.Label(register_frame, image=logo_img5, bg=bg_colour)  # converting the image into a widget
+    logo_widget5.image = logo_img5  # define the widget as logo image
+    logo_widget5.place(x=10, y=10)  # place the image in our frame
+
+    # buttons
+    b1 = tk.Button(  # create button widget
+        register_frame,  # locate in our frame
+        text="Confirm",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="white",  # background colour
+        fg="black",  # font colour
+        state="disabled",
+        cursor="hand2",  # define mouse icon
+        activebackground="black",  # background colour while clicking
+        activeforeground="white",  # font colour while clicking
+        command=insert_user
+    )
+    b1.grid(row=2, column=1, padx=400, pady=470)
+
+    tk.Button(  # create button widget
+        register_frame,  # locate in our frame
+        text="Back",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=lambda: (register.destroy(), open_login_window()),  # command of button
+    ).place(x=725, y=470)  # axis y gap from item above
+
+    def my_check():
+        my_flag = False  #
+        if (c1_v1.get() != 'Yes'): my_flag = True  # Check box is not checked
+        if my_flag != True:
+            b1.config(state='normal')
+        else:
+            b1.config(state='disabled')
+
+    c1_v1 = tk.StringVar(register)  # tells if checkbox is checked or not
+    c1_v1.set('')
+
+    tk.Checkbutton(register, text="I Agree To The Terms And Conditions",
+                   bg=bg_colour,
+                   onvalue='Yes',
+                   offvalue='',
+                   variable=c1_v1,
+                   font=("Ubuntu", 10),
+                   height=1,
+                   width=30,
+                   selectcolor=bg_colour,
+                   command=my_check,
+                   fg="white").place(x=310, y=420)
+
+
+def verified_screen():
+    # window & frame
+    verified = tk.Tk()  # creating a login window
+    verified.title("Movies Recommendation System - Registration Successful")  # title of window
+    verified_frame = tk.Frame(verified, width=1550, height=800, bg=bg_colour)  # size and colour of frame
+    verified_frame.grid(row=0, column=0)  # place the frame in row & column 0
+    verified.geometry('900x600')  # size of window
+    verified_frame.pack_propagate(False)  # prevent widgets from modifying the frame
+
+    # labels
+    tk.Label(verified_frame, text="Registration was successful\nYou can log in to the system", bg=bg_colour, fg="white",
+             font=("Shanti", 35)).place(x=170, y=260)
+
+    # logo
+    logo_img5 = ImageTk.PhotoImage(file="C:/Users/Moshe/Desktop/School/verified2.png", master=verified)  # import image
+    logo_widget5 = tk.Label(verified_frame, image=logo_img5, bg=bg_colour)  # converting the image into a widget
+    logo_widget5.image = logo_img5  # define the widget as logo image
+    logo_widget5.place(x=320, y=10)  # place the image in our frame
+
+    # buttons
+    tk.Button(  # create button widget
+        verified_frame,  # locate in our frame
+        text="Back to home screen",  # text of button
+        font=("Ubuntu", 20),  # font and size
+        bg="#28393a",  # background colour
+        fg="white",  # font colour
+        cursor="hand2",  # define mouse icon
+        activebackground="#badee2",  # background colour while clicking
+        activeforeground="black",  # font colour while clicking
+        command=lambda: (verified.destroy(), open_login_window()),  # command of button
+    ).place(x=310, y=470)  # axis y gap from item above
+
+
+open_login_window()
